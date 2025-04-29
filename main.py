@@ -11,7 +11,7 @@ TARGET_SIZE = (640, 640)
 class GifCombinerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("GIF Combiner for Kraken LCD")
+        self.root.title("GIF Combiner")
         self.folder_path = ""
         self.repeat = tk.IntVar(value=1)
         self.mode = tk.StringVar(value='fill')
