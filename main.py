@@ -16,6 +16,7 @@ class GifCombinerApp:
         self.mode = tk.StringVar(value='fill')
         self.size_x = tk.IntVar(value=640)
         self.size_y = tk.IntVar(value=640)
+        self.trigger = tk.IntVar(value=0)
         self.frames = []
         self.cached_frames = []
         self.is_preloaded = False
@@ -67,9 +68,10 @@ class GifCombinerApp:
         tk.Checkbutton(self.root, text="Enable Compression", variable=self.compression_var).pack(pady=5)
 
         # Trigger the preview on mode change
-        self.mode.trace_add("write", lambda *args: self.preview_combined())
-        self.size_x.trace_add("write", lambda *args: self.preview_combined())
-        self.size_y.trace_add("write", lambda *args: self.preview_combined())
+        trigger_vars = [self.repeat, self.mode, self.size_x, self.size_y, self.trigger]
+        for var in trigger_vars:
+            var.trace_add("write", lambda *args: self.preview_combined())
+
 
     def select_folder(self):
         path = filedialog.askdirectory()
@@ -79,9 +81,18 @@ class GifCombinerApp:
             self.is_preloaded = False
             self.frames = []
             self.cached_frames = []
+            self.frame_update_queue = queue.Queue()  # Clear the queue to avoid stale data
             self.load_and_cache_gifs()
-            self.mode.trace_add("write", lambda *args: self.preview_combined())
+            self.root.after(100, self.wait_for_loading)  # Wait for the loading to complete before triggering preview
 
+    def wait_for_loading(self):
+        """Wait for the GIF loading thread to complete before triggering the preview."""
+        if not self.frame_update_queue.empty():
+            self.cached_frames = self.frame_update_queue.get()
+            self.is_preloaded = True
+            self.trigger.set(1 - self.trigger.get())  # Trigger the preview after loading
+        else:
+            self.root.after(100, self.wait_for_loading)  # Check again after 100ms
 
     def process_frame(self, frame, mode):
         target_size = (self.size_x.get(), self.size_y.get())
@@ -141,11 +152,7 @@ class GifCombinerApp:
                 pass
 
         self.frames = frames
-        self.cached_frames = self.frame_mode_cache['fit']  # Default to fit for initial preview
-
-        # Start previewing the GIF immediately after preloading
-        self.frame_update_queue.put(self.cached_frames)
-        self.root.after(100, self.update_preview)
+        self.frame_update_queue.put(self.frame_mode_cache['fit'])  # Default to fit for initial preview
 
     def preview_combined(self):
         if not self.folder_path:
@@ -172,10 +179,6 @@ class GifCombinerApp:
         # Cycle through frames for preview
         self.current_frame_index = (self.current_frame_index + 1) % len(self.cached_frames)
         self.root.after(100, self.preview_combined)  # Update every 100ms for smooth preview
-
-    def update_preview(self):
-        if not self.frame_update_queue.empty():
-            self.cached_frames = self.frame_update_queue.get()
 
     def show_tooltip(self, event):
         mode = self.mode.get()
