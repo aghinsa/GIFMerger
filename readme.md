@@ -28,7 +28,7 @@ Built using **Tkinter** and **Pillow**, this tool allows you to preview, resize,
 - Install required dependencies:
   
 ```bash
-pip install pillow
+pip install -r requirements.txt
 ```
 
 ### Run the App
