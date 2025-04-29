@@ -194,37 +194,36 @@ class GifCombinerApp:
         self.tooltip_label.config(text="")
 
     def save_combined(self):
-        if not self.frames:
+        if not self.cached_frames:
             messagebox.showwarning("No Preview", "Please preview first before saving.")
             return
 
         save_path = filedialog.asksaveasfilename(defaultextension=".gif", filetypes=[("GIF files", "*.gif")])
         if save_path:
             save_params = {
-                'save_all': True,
-                'append_images': self.frames[1:],
                 'duration': 100,
                 'loop': 0,
                 'disposal': 2,
                 'optimize': True
             }
 
-            # Convert all frames to P mode with the same palette
-            first_frame = self.frames[0]
-            first_frame = first_frame.convert('RGBA')  # Ensure it's RGBA first for consistency
-            palette = first_frame.convert('P', palette=Image.ADAPTIVE, colors=256).getpalette()
-            
-            # Convert all frames to P mode with the same palette
-            frames_in_p_mode = [frame.convert('P', palette=Image.ADAPTIVE, colors=256) for frame in self.frames]
-            
-            # If compression is enabled, apply optimize flag
-            if self.compression_var.get() == 1:
-                save_params['optimize'] = True
-            
-            # Save the GIF with the updated frames and palette
-            frames_in_p_mode[0].save(save_path, **save_params, palette=palette)
-            messagebox.showinfo("Saved", f"GIF saved successfully to:\n{save_path}")
+            # Flatten RGBA frames onto white background to avoid artifacts
+            final_frames = []
+            for frame in self.cached_frames:
+                rgba = frame.convert("RGBA")
+                background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))  # white background
+                composited = Image.alpha_composite(background, rgba)
+                final_frames.append(composited.convert("P", palette=Image.ADAPTIVE))
 
+            # Save using the first frame and appending the rest
+            final_frames[0].save(
+                save_path,
+                save_all=True,
+                append_images=final_frames[1:],
+                **save_params
+            )
+
+            messagebox.showinfo("Saved", f"GIF saved successfully to:\n{save_path}")
 def main():
     root = tk.Tk()
     app = GifCombinerApp(root)
