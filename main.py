@@ -4,6 +4,7 @@ from tkinter import filedialog, ttk, messagebox
 from PIL import Image, ImageTk
 import threading
 import queue
+import concurrent.futures
 
 TARGET_SIZE = (640, 640)
 
@@ -57,7 +58,7 @@ class GifCombinerApp:
         self.preview_canvas.pack(pady=10)
 
         # Tooltip Label for explanation
-        self.tooltip_label = tk.Label(self.root, text="", bg="yellow", width=50, height=2, anchor='w')
+        self.tooltip_label = tk.Label(self.root, text="", bg="#f0e68c", width=50, height=2, anchor='w', relief='sunken')
         self.tooltip_label.pack(pady=5)
 
         # Save GIF Button
@@ -82,6 +83,7 @@ class GifCombinerApp:
             self.frames = []
             self.cached_frames = []
             self.frame_update_queue = queue.Queue()  # Clear the queue to avoid stale data
+            self.show_status("Loading GIFs...")
             self.load_and_cache_gifs()
             self.root.after(100, self.wait_for_loading)  # Wait for the loading to complete before triggering preview
 
@@ -90,6 +92,7 @@ class GifCombinerApp:
         if not self.frame_update_queue.empty():
             self.cached_frames = self.frame_update_queue.get()
             self.is_preloaded = True
+            self.clear_status()
             self.trigger.set(1 - self.trigger.get())  # Trigger the preview after loading
         else:
             self.root.after(100, self.wait_for_loading)  # Check again after 100ms
@@ -132,27 +135,39 @@ class GifCombinerApp:
         thread.start()
 
     def _load_gifs(self, gif_files):
-        frames = []
-        for gif_file in gif_files:
+        def process_single_gif(gif_file):
+            local_mode_cache = {'fit': [], 'fill': [], 'stretch': []}
+            local_frames = []
             gif_path = os.path.join(self.folder_path, gif_file)
-            gif = Image.open(gif_path)
-
             try:
+                gif = Image.open(gif_path)
                 while True:
                     frame = gif.copy()
-                    for mode in ['fit', 'fill', 'stretch']:
-                        if mode not in self.frame_mode_cache:
-                            self.frame_mode_cache[mode] = []
-                        processed_frame = self.process_frame(frame, mode)
-                        self.frame_mode_cache[mode].append(processed_frame)
+                    for mode in local_mode_cache:
+                        processed = self.process_frame(frame.copy(), mode)
+                        local_mode_cache[mode].append(processed)
                     for _ in range(self.repeat.get()):
-                        frames.append(frame)
+                        local_frames.append(frame.copy())
                     gif.seek(gif.tell() + 1)
             except EOFError:
                 pass
+            return local_mode_cache, local_frames
 
-        self.frames = frames
-        self.frame_update_queue.put(self.frame_mode_cache['fit'])  # Default to fit for initial preview
+        all_mode_cache = {'fit': [], 'fill': [], 'stretch': []}
+        all_raw_frames = []
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            results = executor.map(process_single_gif, gif_files)
+
+            for mode_cache, raw_frames in results:
+                for mode in all_mode_cache:
+                    all_mode_cache[mode].extend(mode_cache[mode])
+                all_raw_frames.extend(raw_frames)
+
+        self.frames = all_raw_frames
+        self.frame_mode_cache = all_mode_cache
+        self.frame_update_queue.put(all_mode_cache['fit'])  # Default preview mode
+
 
     def preview_combined(self):
         if not self.folder_path:
@@ -193,37 +208,52 @@ class GifCombinerApp:
     def hide_tooltip(self, event):
         self.tooltip_label.config(text="")
 
+    def show_status(self, message):
+        self.tooltip_label.config(text=message)
+        self.tooltip_label.update_idletasks()
+
+    def clear_status(self):
+        self.tooltip_label.config(text="")
+
     def save_combined(self):
         if not self.cached_frames:
             messagebox.showwarning("No Preview", "Please preview first before saving.")
             return
+        
+        try:
+            self.show_status("Saving GIF...")
+            save_path = filedialog.asksaveasfilename(defaultextension=".gif", filetypes=[("GIF files", "*.gif")])
+            if save_path:
+                save_params = {
+                    'duration': 100,
+                    'loop': 0,
+                    'disposal': 2,
+                    'optimize': True
+                }
 
-        save_path = filedialog.asksaveasfilename(defaultextension=".gif", filetypes=[("GIF files", "*.gif")])
-        if save_path:
-            save_params = {
-                'duration': 100,
-                'loop': 0,
-                'disposal': 2,
-                'optimize': True
-            }
+                # Flatten RGBA frames onto white background to avoid artifacts
+                final_frames = []
+                for frame in self.cached_frames:
+                    rgba = frame.convert("RGBA")
+                    background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))  # white background
+                    composited = Image.alpha_composite(background, rgba)
+                    final_frames.append(composited.convert("P", palette=Image.ADAPTIVE))
 
-            # Flatten RGBA frames onto white background to avoid artifacts
-            final_frames = []
-            for frame in self.cached_frames:
-                rgba = frame.convert("RGBA")
-                background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))  # white background
-                composited = Image.alpha_composite(background, rgba)
-                final_frames.append(composited.convert("P", palette=Image.ADAPTIVE))
+                # Save using the first frame and appending the rest
+                final_frames[0].save(
+                    save_path,
+                    save_all=True,
+                    append_images=final_frames[1:],
+                    **save_params
+                )
+                messagebox.showinfo("Saved", f"GIF saved successfully to:\n{save_path}")
+        except Exception as e:
+            self.show_status("Saving failed.")
+            messagebox.showerror("Error", str(e))
+        finally:
+            self.clear_status()
 
-            # Save using the first frame and appending the rest
-            final_frames[0].save(
-                save_path,
-                save_all=True,
-                append_images=final_frames[1:],
-                **save_params
-            )
 
-            messagebox.showinfo("Saved", f"GIF saved successfully to:\n{save_path}")
 def main():
     root = tk.Tk()
     app = GifCombinerApp(root)
